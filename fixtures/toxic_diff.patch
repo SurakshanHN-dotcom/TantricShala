@@ -1,0 +1,13 @@
+--- a/fixtures/sample_repo/payment.py
++++ b/fixtures/sample_repo/payment.py
+@@ -15,10 +15,0 @@
+-    def process_payment(self, amount, user_id, currency="INR"):
+-        """Process a payment. Called by: checkout, subscriptions, refunds."""
+-        user_id = sanitize(user_id)
+-        verify_token(user_id)
+-        log_event("payment_started", {"amount": amount, "currency": currency})
+-        validated = self._validate_amount(amount)
+-        result = self._charge(validated, currency)
+-        log_event("payment_completed", result)
+-        return result
+-

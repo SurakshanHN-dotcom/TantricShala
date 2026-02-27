@@ -14,6 +14,9 @@ export interface GraphNode {
     version_id: string;
     language?: string;
     hop_distance?: number;
+    // New additions for Yukti requirements
+    loc?: number;
+    extension?: string;
     // UI state
     blastAffected?: boolean;
     changed?: boolean;
@@ -35,6 +38,12 @@ export interface BlastRadiusSummary {
     total_edges: number;
     max_hop_distance: number;
     symbols_queried: string[];
+}
+
+export interface RiskMetrics {
+    coupling: number;
+    cohesion: number;
+    churn: number;
 }
 
 export interface AuditResult {

@@ -1,88 +1,26 @@
-/**
- * App.tsx – Main Application Controller for Yuktham.
- * 
- * Orchestrates the overall layout, file ingestion pipeline, and state synchronization:
- * - File Ingestion: Handles drag-and-drop or picker-based multi-file/folder selection.
- * - Neo4j Sync: Triggers backend ingestion and refreshes the D3 graph view.
- * - Reactive UI: Manages the resizable sidebar, node selection, and upload status.
- * - Integration: Hosts the GraphView (D3.js) and the ChatPanel (Yukta/Gemini).
- */
-import React, { useState, useCallback, useEffect } from 'react';
-import GraphView from './components/GraphView';
-import ChatPanel from './components/ChatPanel';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useYuktiStore } from './store/useYuktiStore';
+import CommandStrip from './components/CommandStrip';
+import GalaxyViewport from './components/GalaxyViewport';
+import BlueprintEditor from './components/BlueprintEditor';
+import SentinelHUD from './components/SentinelHUD';
 import { GraphNode, GraphEdge } from './types';
 import './index.css';
 
-const MOCK_NODES: GraphNode[] = [];
-const MOCK_EDGES: GraphEdge[] = [];
 const API_BASE = 'http://localhost:8000';
 
-function traverseEntry(entry: any, allFiles: File[], onDone: () => void) {
-    if (entry.isFile) {
-        entry.file((file: File) => {
-            allFiles.push(file);
-            onDone();
-        });
-    } else if (entry.isDirectory) {
-        const dirReader = entry.createReader();
-        const entries: any[] = [];
-        const readEntries = () => {
-            dirReader.readEntries((results: any[]) => {
-                if (!results.length) {
-                    processEntries(entries);
-                } else {
-                    entries.push(...results);
-                    readEntries();
-                }
-            }, onDone);
-        };
-        const processEntries = (arr: any[]) => {
-            if (arr.length === 0) return onDone();
-            let pending = arr.length;
-            const checkDone = () => { if (--pending === 0) onDone(); };
-            arr.forEach((e) => traverseEntry(e, allFiles, checkDone));
-        };
-        readEntries();
-    } else {
-        onDone();
-    }
-}
-
 export default function App() {
-    const [graphNodes, setGraphNodes] = useState<GraphNode[]>(MOCK_NODES);
-    const [graphEdges, setGraphEdges] = useState<GraphEdge[]>(MOCK_EDGES);
-    const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+    const { paneState, setPaneSizes, setFileContents, breadcrumbs } = useYuktiStore();
+    const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
+    const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
 
-    const [dragging, setDragging] = useState(false);
-    const [uploadStatus, setUploadStatus] = useState<{ state: 'idle' | 'loading' | 'ok' | 'err'; message: string }>({ state: 'idle', message: '' });
-    const [parseStats, setParseStats] = useState<string | null>(null);
-
-    const [sidebarWidth, setSidebarWidth] = useState(380);
-    const [isResizing, setIsResizing] = useState(false);
+    const [isResizing, setIsResizing] = useState<'left-center' | 'center-right' | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     // Initial graph load
     useEffect(() => {
         fetchGraph();
     }, []);
-
-    useEffect(() => {
-        if (!isResizing) return;
-        const handleMouseMove = (e: MouseEvent) => {
-            let newWidth = window.innerWidth - e.clientX;
-            if (newWidth < 250) newWidth = 250;
-            if (newWidth > 800) newWidth = 800;
-            setSidebarWidth(newWidth);
-        };
-        const handleMouseUp = () => {
-            setIsResizing(false);
-        };
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
-        return () => {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
-        };
-    }, [isResizing]);
 
     const fetchGraph = async () => {
         try {
@@ -99,13 +37,68 @@ export default function App() {
         }
     };
 
+    // Global Keybinds
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.metaKey && e.key === 'u') {
+                e.preventDefault();
+                document.getElementById('yukti-upload-input')?.click();
+            }
+            if (e.metaKey && e.key === 'g') {
+                e.preventDefault();
+                // Focus graph (mock logic)
+                useYuktiStore.getState().setMaximizedPane('left');
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    // Resize Logic
+    useEffect(() => {
+        if (!isResizing || !containerRef.current) return;
+
+        const handleMouseMove = (e: MouseEvent) => {
+            const containerWidth = containerRef.current!.offsetWidth;
+            const [w1, w2, w3] = paneState.sizes;
+
+            const clientX = Math.max(0, Math.min(e.clientX, containerWidth));
+            const totalPercent = (clientX / containerWidth) * 100;
+
+            if (isResizing === 'left-center') {
+                // Adjust left pane, keep right pane fixed
+                const newLeft = Math.max(15, Math.min(totalPercent, 100 - w3 - 15));
+                const newCenter = 100 - newLeft - w3;
+                setPaneSizes([newLeft, newCenter, w3]);
+            } else if (isResizing === 'center-right') {
+                // Adjust right pane, keep left pane fixed
+                const newRight = 100 - Math.max(w1 + 15, Math.min(totalPercent, 85));
+                const newCenter = 100 - w1 - newRight;
+                setPaneSizes([w1, newCenter, newRight]);
+            }
+        };
+
+        const handleMouseUp = () => {
+            setIsResizing(null);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = 'col-resize';
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = 'default';
+        };
+    }, [isResizing, paneState.sizes, setPaneSizes]);
+
     const handleUploadFiles = useCallback(async (files: FileList | File[]) => {
         if (!files || files.length === 0) return;
-        setUploadStatus({ state: 'loading', message: 'Reading files...' });
+        console.log(`Uploading ${files.length} files...`);
 
         const fileContents: Record<string, string> = {};
-        let count = 0;
-
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             const name = file.webkitRelativePath || file.name;
@@ -114,18 +107,13 @@ export default function App() {
             try {
                 const text = await file.text();
                 fileContents[name] = text;
-                count++;
             } catch (err) {
                 console.warn(`Could not read ${name}:`, err);
             }
         }
 
-        if (count === 0) {
-            setUploadStatus({ state: 'err', message: 'No readable text files found' });
-            return;
-        }
-
-        setUploadStatus({ state: 'loading', message: 'Parsing and ingesting to Neo4j...' });
+        // Save to store for the code editor
+        setFileContents(fileContents);
 
         try {
             const res = await fetch(`${API_BASE}/api/upload-folder`, {
@@ -134,154 +122,75 @@ export default function App() {
                 body: JSON.stringify({ files: fileContents })
             });
 
-            const data = await res.json();
-            if (!res.ok) {
-                throw new Error(data.detail || 'Upload failed');
+            if (res.ok) {
+                await fetchGraph();
             }
-
-            setParseStats(`${data.parse_stats.nodes_extracted} nodes, ${data.parse_stats.edges_extracted} edges`);
-            setUploadStatus({
-                state: 'ok',
-                message: `✓ Ingested: ${count} files.`,
-            });
-
-            // Refresh graph
-            await fetchGraph();
-
         } catch (e: any) {
-            setUploadStatus({ state: 'err', message: `Upload failed: ${e.message}` });
+            console.error('Upload failed:', e);
         }
-    }, []);
+    }, [setFileContents]);
 
-    const handleDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setDragging(false);
-        const items = e.dataTransfer.items;
-        if (items && items.length > 0) {
-            const allFiles: File[] = [];
-            let pending = 0;
-            const checkDone = () => { if (pending === 0 && allFiles.length > 0) handleUploadFiles(allFiles); };
-            for (let i = 0; i < items.length; i++) {
-                const entry = items[i].webkitGetAsEntry?.();
-                if (entry) {
-                    pending++;
-                    traverseEntry(entry, allFiles, () => { pending--; checkDone(); });
-                } else {
-                    const file = items[i].getAsFile();
-                    if (file) allFiles.push(file);
-                }
-            }
-            if (pending === 0 && allFiles.length > 0) handleUploadFiles(allFiles);
-            else if (pending === 0) handleUploadFiles(e.dataTransfer.files);
-        } else {
-            handleUploadFiles(e.dataTransfer.files);
-        }
-    }, [handleUploadFiles]);
-
-    const openFilePicker = useCallback(() => {
-        const input = document.createElement('input');
-        input.type = 'file'; input.multiple = true;
-        input.onchange = () => { if (input.files) handleUploadFiles(input.files); };
-        input.click();
-    }, [handleUploadFiles]);
-
-    const openFolderPicker = useCallback(() => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        (input as any).webkitdirectory = true;
-        input.onchange = () => { if (input.files) handleUploadFiles(input.files); };
-        input.click();
-    }, [handleUploadFiles]);
+    const isMax = paneState.maximizedPane;
+    const [w1, w2, w3] = paneState.sizes;
 
     return (
-        <div className={`app ${isResizing ? 'resizing-sidebar' : ''}`} style={{ '--sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}>
-            {/* ── Header ──────────────────────────────────── */}
-            <header className="header">
-                <div className="header-logo">
-                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                        <circle cx="14" cy="14" r="13" stroke="#3b82f6" strokeWidth="1.5" opacity="0.4" />
-                        <path d="M14 6L6 22h16L14 6z" fill="none" stroke="#3b82f6" strokeWidth="1.5" strokeLinejoin="round" />
-                        <circle cx="14" cy="14" r="3" fill="#ef4444" />
-                        <path d="M14 11v6M11 14h6" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" opacity="0.6" />
-                    </svg>
-                    <div>
-                        <div className="header-title">Yuktham</div>
-                        <div className="header-subtitle">Architectural Blast-Radius Sentinel (Neo4j Edition)</div>
-                    </div>
+        <div className="app-container">
+            {/* Header (Command Strip) */}
+            <CommandStrip breadcrumbs={breadcrumbs} onUpload={handleUploadFiles} />
+
+            {/* Main Triptych Layout */}
+            <div className="triptych-container" ref={containerRef}>
+
+                {/* 1. Blueprint Editor (Left) */}
+                <div
+                    className={`pane ${isMax && isMax !== 'left' ? 'hidden' : ''}`}
+                    style={{ width: isMax === 'left' ? '100%' : `${w1}%` }}
+                >
+                    <BlueprintEditor />
                 </div>
-                <div className="header-spacer" />
-                {parseStats && (
-                    <div className="mock-badge active" style={{ color: '#60a5fa', borderColor: 'rgba(96,165,250,0.3)' }}>
-                        📊 {parseStats}
-                    </div>
+
+                {/* Sash 1 */}
+                {!isMax && (
+                    <div
+                        className={`sash ${isResizing === 'left-center' ? 'active' : ''}`}
+                        onMouseDown={(e) => { e.preventDefault(); setIsResizing('left-center'); }}
+                    />
                 )}
-            </header>
 
-            {/* ── Graph Canvas ────────────────────────────── */}
-            <GraphView
-                nodes={graphNodes}
-                edges={graphEdges}
-                blastNodeIds={new Set()}
-                changedNodeIds={new Set()}
-                onNodeSelect={setSelectedNode}
-            />
-
-            {/* ── Sidebar Resizer ─────────────────────────── */}
-            <div
-                className={`sidebar-resizer ${isResizing ? 'resizing' : ''}`}
-                onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }}
-            />
-
-            {/* ── Sidebar ─────────────────────────────────── */}
-            <aside className="sidebar" style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ flexShrink: 0 }}>
-                    {/* Node Inspector */}
-                    <div className="sidebar-section">
-                        <div className="section-title">Node Inspector</div>
-                        {selectedNode ? (
-                            <div className="inspector">
-                                <div className="inspector-row"><span className="inspector-key">Name</span><span className="inspector-val">{selectedNode.name}</span></div>
-                                <div className="inspector-row"><span className="inspector-key">Type</span><span className={`label-chip ${selectedNode.label}`}>{selectedNode.label}</span></div>
-                                <div className="inspector-row"><span className="inspector-key">File</span><span className="inspector-val">{selectedNode.file_path}</span></div>
-                                <div className="inspector-row"><span className="inspector-key">Lines</span><span className="inspector-val">{selectedNode.line_start}–{selectedNode.line_end}</span></div>
-                            </div>
-                        ) : (
-                            <div className="empty-state" style={{ padding: '8px 0' }}>
-                                <span className="icon">🔍</span><span>Click any node to inspect</span>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Upload Panel */}
-                    <div className="sidebar-section">
-                        <div className="section-title">Upload Codebase</div>
-                        <div
-                            className={`upload-zone${dragging ? ' dragging' : ''}`}
-                            style={{ padding: '16px 12px' }}
-                            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-                            onDragLeave={() => setDragging(false)}
-                            onDrop={handleDrop}
-                        >
-                            <div className="upload-icon" style={{ fontSize: 24, marginBottom: 4 }}>📦</div>
-                            <p style={{ margin: 0, fontSize: 13 }}>Drop <span>files, folders, or .zip</span> here</p>
-                            <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'center' }}>
-                                <button className="toggle-btn" style={{ fontSize: 11 }} onClick={(e) => { e.stopPropagation(); openFilePicker(); }}>📄 Files</button>
-                                <button className="toggle-btn" style={{ fontSize: 11 }} onClick={(e) => { e.stopPropagation(); openFolderPicker(); }}>📁 Folder</button>
-                            </div>
-                        </div>
-                        {uploadStatus.state !== 'idle' && (
-                            <div className={`upload-status ${uploadStatus.state === 'ok' ? 'ok' : uploadStatus.state === 'err' ? 'err' : 'loading'}`} style={{ marginTop: 8 }}>
-                                {uploadStatus.state === 'ok' ? '✓' : uploadStatus.state === 'err' ? '✕' : '⟳'} {uploadStatus.message}
-                            </div>
-                        )}
-                    </div>
+                {/* 2. Galaxy Viewport (Center) */}
+                <div
+                    className={`pane ${isMax && isMax !== 'center' ? 'hidden' : ''}`}
+                    style={{ width: isMax === 'center' ? '100%' : `${w2}%` }}
+                >
+                    <GalaxyViewport nodes={graphNodes} edges={graphEdges} />
                 </div>
 
-                {/* Chat Panel - Takes up remaining space */}
-                <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                    <ChatPanel />
+                {/* Sash 2 */}
+                {!isMax && (
+                    <div
+                        className={`sash ${isResizing === 'center-right' ? 'active' : ''}`}
+                        onMouseDown={(e) => { e.preventDefault(); setIsResizing('center-right'); }}
+                    />
+                )}
+
+                {/* 3. Sentinel HUD (Right) */}
+                <div
+                    className={`pane ${isMax && isMax !== 'right' ? 'hidden' : ''}`}
+                    style={{ width: isMax === 'right' ? '100%' : `${w3}%` }}
+                >
+                    <SentinelHUD />
                 </div>
-            </aside>
+            </div>
+
+            {/* Hidden Input for file uploads */}
+            <input
+                type="file"
+                id="yukti-upload-input"
+                multiple
+                {...({ webkitdirectory: true } as any)}
+                className="hidden-input"
+                onChange={(e) => { if (e.target.files) handleUploadFiles(e.target.files); }}
+            />
         </div>
     );
 }
